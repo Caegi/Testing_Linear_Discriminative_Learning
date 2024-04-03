@@ -2,6 +2,8 @@ using JudiLing # our package
 using CSV # read csv files
 using DataFrames # parse data into dataframes
 using Statistics # mean function
+using Word2Vec # load embeddings
+
 
 mkpath(joinpath(@__DIR__, "data"))
 # load french file
@@ -9,13 +11,17 @@ nouns = DataFrame(CSV.File(joinpath(@__DIR__, "assets", "distrib", "nlexique.csv
 adjs = DataFrame(CSV.File(joinpath(@__DIR__, "assets", "distrib", "alexique.csv")))
 verbs = DataFrame(CSV.File(joinpath(@__DIR__, "assets", "distrib", "vlexique.csv")))
 ortho_adjs = DataFrame(CSV.File(joinpath(@__DIR__, "assets", "distrib", "alexique_ortho_final.csv")))
+model = wordvectors(joinpath(@__DIR__, "assets","model_redo", "model.w2v"))
+#display(vocabulary(model)[1:1000])
+#display(get_vector(model, "manger_v"))
 # french = vcat(nouns, adjs, verbs, cols = :union)
 french = adjs
-S_dataset = orhto_adjs
-
-# Open the file in read mode
-file = open(joinpath(@__DIR__, "assets", "lemma-A-pos.txt"), "r")
+ortho_dataset = ortho_adjs
 column = "lexeme"
+
+"""# Open the file in read mode
+file = open(joinpath(@__DIR__, "assets", "lemma-A-pos.txt"), "r")
+
 # Read all lines from the file into an array
 display("reading file")
 lines = readlines(file)
@@ -24,18 +30,35 @@ lines = readlines(file)
 close(file)
 
 display("loading embeddings")
-embedding_table = Dict(split(split(line)[1], "_")[1] => [parse(Float64, val) for val in split(line)[2:end]] for line in lines[2:100000])
+embedding_table = Dict(split(split(line)[1], "_")[1] => [parse(Float64, val) for val in split(line)[2:end]] for line in lines[2:1000])
 lines = nothing
 display("creating filter")
-filter = [in(word, keys(embedding_table)) for word in french[!, column]]
+filters = [[in(word, keys(embedding_table)) for word in french[!, column]] for column in column_names]
+
+"""
+POS = "_adj"
+column_names = vcat(["lexeme"], names(ortho_dataset)[3:end])
+display(typeof(vocabulary(model)))
+voca = Set(vocabulary(model))
+display(column_names)
+display(length(vocabulary(model)))
+filters = [[in(word*POS, voca) for word in ortho_dataset[!, column_name]] for column_name in column_names]
+
 display("filtering words without embeddings")
-french = french[filter, :]
+french_form = [word for (filter, column_name) in zip(filters, column_names) for word in french[!, column_name][filter] ]
+french_embed = [get_vector(model, word*POS) for (filter, column_name) in zip(filters, column_names) for word in ortho_dataset[!, column_name][filter]]
+#french_ortho = [word for (filter, column_name) in zip(filters, column_names) for word in ortho_dataset[!, column_name][filter]]
+
+french_form = DataFrame(lexeme = french_form)
+# french_embed = DataFrame(lexeme = french_embed)
+#display(names(french_embed))
+#display(french_embed[!, "lexeme"][1:10])
+display(french_form[!, "lexeme"][1:10])
 display("number of words after filtering:")
-display(sum(filter))
+display([sum(filter) for filter in filters])
 
-display("Cross Validation")
 
-# cross-validation
+# Split the dataset into training and validation sets
 function get_trigrams(word::AbstractString)
     trigrams = Set()
     word = "#" * word * "#" 
@@ -56,20 +79,34 @@ train_set = Set()
 val_set = Set()
 all_trigrams = Set()
 
+CORPUS_MAX_SIZE = 500000
 # Iterate over words in the dataset
-for word in french[:, column]
-    if word ∈ (train_set ∪ val_set)
+train_filter = []
+val_filter = []
+for column in names(french_form)
+    display(column)
+for word in french_form[!, column]
+    if word ∈ (train_set ∪ val_set) || length(train_set) >= CORPUS_MAX_SIZE
+        push!(train_filter, false)
+        push!(val_filter, false)
         continue
     end
     word_trigrams = get_trigrams(word)
-    if any(trigram ∉ all_trigrams for trigram in word_trigrams)  || length(val_set) >= round(nrow(french) * 0.4)
+    if any(trigram ∉ all_trigrams for trigram in word_trigrams)  || length(val_set) >= round(nrow(french) * 0.2) ||
         push!(train_set, word)
         union!(all_trigrams, word_trigrams)
+        push!(train_filter, true)
+        push!(val_filter, false)
       #  push!(all_trigrams, word_trigrams)
     else
         push!(val_set, word)
+        push!(train_filter, false)
+        push!(val_filter, true)
     end
 end
+# train_filter = [i for i in 1:length(train_filter) if train_filter[i]]
+# val_filter = [i for i in 1:length(val_filter) if val_filter[i]]
+
 train_size = length(train_set)
 val_size = length(val_set)
 trigram_size = length(all_trigrams)
@@ -79,11 +116,20 @@ display("number of words in val: $val_size")
 display("number of trigrams: $trigram_size")
 display("number of words both in val and train (should be 0): $train_val_overlap")
 
-train_filter = [in(word, train_set) for word in french[!, column]]
-val_filter = [in(word, val_set) for word in french[!, column]]
+# train_filter = [in(word, train_set) for word in french[!, column]]
+# val_filter = [in(word, val_set) for word in french[!, column]]
 
-french_train = french[train_filter, :]
-french_val = french[val_filter, :]
+
+
+display(typeof(train_filter))
+train_filter = convert(Array{Bool}, train_filter)
+val_filter = convert(Array{Bool}, val_filter)
+display(typeof(train_filter))
+display(length(train_filter))
+display(length(val_filter))
+display(nrow(french_form))
+french_train = french_form[train_filter, :]
+french_val = french_form[val_filter, :]
 
 # create C matrices for both training and validation datasets
 cue_obj_train, cue_obj_val = JudiLing.make_cue_matrix(
@@ -99,8 +145,8 @@ cue_obj_train, cue_obj_val = JudiLing.make_cue_matrix(
 n_features = size(cue_obj_train.C, 2)
 
 display("creating Semantic matrices")
-S_train = [embedding_table[word] for word in french_train[!, column]]
-S_val = [embedding_table[word] for word in french_val[!, column]]
+S_train = french_embed[train_filter]
+S_val = french_embed[val_filter]
 
 
 display("transforming vector of vectors into matrix")
@@ -176,10 +222,10 @@ avg_eval1 = mean(eval1_results)
 avg_eval3 = mean(eval3_results)
 
 # Printing the final averaged results
-println("Average Evaluation 1: $avg_eval1")
-println("Evaluation 2: $eval2") # This is computed on the full set, not averaged over batches
-println("Average Evaluation 3: $avg_eval3")
-println("Evaluation 4: $eval4") # Also computed on the full set
+println("train form prediction: $avg_eval1")
+println("Eval Form prediction : $eval2") # This is computed on the full set, not averaged over batches
+println("train semantic prediction : $avg_eval3")
+println("Eval Semantic prediction: $eval4") # Also computed on the full set
 
 
 # we can use build path and learn path
