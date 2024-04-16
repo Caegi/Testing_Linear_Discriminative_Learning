@@ -190,7 +190,7 @@ display("form to meaning done")
 
 # we predict S and C for both training and validation datasets
 Chat_train = S_train * G_train
-<<<<<<< HEAD
+
 if VERBOSE == 1
     display("C_hat train done")
 end
