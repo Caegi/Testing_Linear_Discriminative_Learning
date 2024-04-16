@@ -11,51 +11,61 @@ nouns = DataFrame(CSV.File(joinpath(@__DIR__, "assets", "distrib", "nlexique.csv
 adjs = DataFrame(CSV.File(joinpath(@__DIR__, "assets", "distrib", "alexique.csv")))
 verbs = DataFrame(CSV.File(joinpath(@__DIR__, "assets", "distrib", "vlexique.csv")))
 ortho_adjs = DataFrame(CSV.File(joinpath(@__DIR__, "assets", "distrib", "alexique_ortho_final.csv")))
+ortho_verbs = DataFrame(CSV.File(joinpath(@__DIR__, "assets", "distrib", "vlexique_ortho.csv")))
+ortho_nouns = DataFrame(CSV.File(joinpath(@__DIR__, "assets", "distrib", "nlexique_ortho_final.csv")))
 model = wordvectors(joinpath(@__DIR__, "assets","model_redo", "model.w2v"))
-#display(vocabulary(model)[1:1000])
-#display(get_vector(model, "manger_v"))
-# french = vcat(nouns, adjs, verbs, cols = :union)
-french = adjs
+
+VERBOSE = 0 # set verbosity to 1 to have more information about the process
+
+# choose which dataset to use can be either verbs or adjs or nouns, and their phonological form or their orthographic form
+# if you want to use the orthographic form, french and ortho_dataset should be the same (and orthographic): (ex ortho_adj and ortho_adj, ortho_verbs and ortho_verbs)
+# if you want to use the phonological form, french and ortho_dataset should be different (ex adj and ortho_adj or verbs and ortho_verbs)
+# so at each CHANGE you MUST change 3 variable: french, ortho_dataset and POS so that they are consistent
+
+french = ortho_adjs
 ortho_dataset = ortho_adjs
-column = "lexeme"
+POS = "_adj" # _v for verbs _n for nouns _adj for adjectives
+PHONO = ortho_dataset == french # variable used for logging
 
-"""# Open the file in read mode
-file = open(joinpath(@__DIR__, "assets", "lemma-A-pos.txt"), "r")
+column_names = vcat(["lexeme"], names(ortho_dataset)[3:end]) # ignore the variant column
 
-# Read all lines from the file into an array
-display("reading file")
-lines = readlines(file)
-
-# Close the file
-close(file)
-
-display("loading embeddings")
-embedding_table = Dict(split(split(line)[1], "_")[1] => [parse(Float64, val) for val in split(line)[2:end]] for line in lines[2:1000])
-lines = nothing
-display("creating filter")
-filters = [[in(word, keys(embedding_table)) for word in french[!, column]] for column in column_names]
-
-"""
-POS = "_adj"
-column_names = vcat(["lexeme"], names(ortho_dataset)[3:end])
-display(typeof(vocabulary(model)))
 voca = Set(vocabulary(model))
-display(column_names)
-display(length(vocabulary(model)))
+display("the column of the df are: $(column_names)")
+if VERBOSE == 1
+    display("there are $(length(vocabulary(model))) words in the model")
+end
 filters = [[in(word*POS, voca) for word in ortho_dataset[!, column_name]] for column_name in column_names]
 
-display("filtering words without embeddings")
-french_form = [word for (filter, column_name) in zip(filters, column_names) for word in french[!, column_name][filter] ]
-french_embed = [get_vector(model, word*POS) for (filter, column_name) in zip(filters, column_names) for word in ortho_dataset[!, column_name][filter]]
-#french_ortho = [word for (filter, column_name) in zip(filters, column_names) for word in ortho_dataset[!, column_name][filter]]
 
-french_form = DataFrame(lexeme = french_form)
-# french_embed = DataFrame(lexeme = french_embed)
-#display(names(french_embed))
-#display(french_embed[!, "lexeme"][1:10])
-display(french_form[!, "lexeme"][1:10])
-display("number of words after filtering:")
-display([sum(filter) for filter in filters])
+display("filtering words without embeddings")
+french_forms = [[word for word in french[!, column_name][filter]] for (filter, column_name) in zip(filters, column_names)]
+french_embed = [get_vector(model, word*POS) for (filter, column_name) in zip(filters, column_names) for word in ortho_dataset[!, column_name][filter]]
+
+
+new_df = DataFrame()
+CORPUS_MAX_SIZE = 500000 # Maximum number of words to be considered in the corpus. should be at least 2 times the column_size
+column_size = Int64(min((CORPUS_MAX_SIZE / length(column_names)), minimum([length(french_forms[i]) for i in 1:length(french_forms)])))
+
+
+# Populate the DataFrame with columns named as per `column_names`, each initialized with `french_form[1]`.
+for i in 1:length(column_names)
+    new_df[!, column_names[i]] = french_forms[i][1:column_size] # Assuming `french_form[1]` is the value you want to replicate across the entire column. Adjust the replication as needed.
+end
+
+
+forms = [word for column in french_forms for word in column]
+french_form = DataFrame(lexeme = forms)
+
+
+display("number of words left after filtering those without embeddings:")
+display(sum([sum(filter) for filter in filters]))
+
+if VERBOSE == 1
+    display("number of words in each column:")
+    display([sum(filter) for filter in filters])
+end
+
+
 
 
 # Split the dataset into training and validation sets
@@ -79,33 +89,47 @@ train_set = Set()
 val_set = Set()
 all_trigrams = Set()
 
-CORPUS_MAX_SIZE = 500000
+
 # Iterate over words in the dataset
 train_filter = []
 val_filter = []
-for column in names(french_form)
-    display(column)
-for word in french_form[!, column]
-    if word ∈ (train_set ∪ val_set) || length(train_set) >= CORPUS_MAX_SIZE
-        push!(train_filter, false)
-        push!(val_filter, false)
-        continue
+help = []
+
+column_size = 100000
+
+
+for column in french_forms
+    i = 0
+    col = length(help)+1
+    
+    push!(help, 1)
+    for word in column # french_forms[!, column]
+        i += 1
+        if word ∈ (train_set ∪ val_set) || length((train_set ∪ val_set)) > CORPUS_MAX_SIZE || i >= column_size
+            push!(train_filter, false)
+            push!(val_filter, false)
+            continue
+        end
+        word_trigrams = get_trigrams(word)
+        if any(trigram ∉ all_trigrams for trigram in word_trigrams) || length(help) <= 1 || length(val_set) >= round(length(train_set) * 0.2) || (i + col) % 2 == 0
+            push!(train_set, word)
+            union!(all_trigrams, word_trigrams)
+            push!(train_filter, true)
+            push!(val_filter, false)
+        #  push!(all_trigrams, word_trigrams)
+        else
+            push!(val_set, word)
+            push!(train_filter, false)
+            push!(val_filter, true)
+        end
     end
-    word_trigrams = get_trigrams(word)
-    if any(trigram ∉ all_trigrams for trigram in word_trigrams)  || length(val_set) >= round(nrow(french) * 0.2) ||
-        push!(train_set, word)
-        union!(all_trigrams, word_trigrams)
-        push!(train_filter, true)
-        push!(val_filter, false)
-      #  push!(all_trigrams, word_trigrams)
-    else
-        push!(val_set, word)
-        push!(train_filter, false)
-        push!(val_filter, true)
-    end
+    dataset_size = length((train_set ∪ val_set))
+    train_size = length(train_set)
+    val_size = length(val_set)
+    
+    display("processing column $col, dataset_size = $dataset_size , train_size = $train_size, val_size = $val_size")
 end
-# train_filter = [i for i in 1:length(train_filter) if train_filter[i]]
-# val_filter = [i for i in 1:length(val_filter) if val_filter[i]]
+
 
 train_size = length(train_set)
 val_size = length(val_set)
@@ -114,29 +138,28 @@ train_val_overlap = length(train_set ∩ val_set)
 display("number of words in train: $train_size")
 display("number of words in val: $val_size")
 display("number of trigrams: $trigram_size")
-display("number of words both in val and train (should be 0): $train_val_overlap")
-
-# train_filter = [in(word, train_set) for word in french[!, column]]
-# val_filter = [in(word, val_set) for word in french[!, column]]
-
+if VERBOSE == 1
+    display("number of words both in val and train (should be 0): $train_val_overlap")
+end
 
 
-display(typeof(train_filter))
 train_filter = convert(Array{Bool}, train_filter)
 val_filter = convert(Array{Bool}, val_filter)
-display(typeof(train_filter))
-display(length(train_filter))
-display(length(val_filter))
-display(nrow(french_form))
+
+french_form = convert(Array{String}, french_form[!, "lexeme"])
+
+french_form = DataFrame(lexeme = french_form)
+
 french_train = french_form[train_filter, :]
 french_val = french_form[val_filter, :]
+
 
 # create C matrices for both training and validation datasets
 cue_obj_train, cue_obj_val = JudiLing.make_cue_matrix(
     french_train,
     french_val,
     grams = 3,
-    target_col = :lexeme,
+    target_col = "lexeme",
     tokenized = false,
     keep_sep = false,
 )
@@ -164,69 +187,61 @@ display("form to meaning done")
 
 # we predict S and C for both training and validation datasets
 Chat_train = S_train * G_train
-display("C_hat train done")
+if VERBOSE == 1
+    display("C_hat train done")
+end
+
 Chat_val = S_val * G_train
-display("C_hat val done")
+if VERBOSE == 1   
+    display("C_hat val done")
+end
 Shat_train = cue_obj_train.C * F_train
-display("S_hat train done")
+if VERBOSE == 1
+    display("S_hat train done")
+end
 Shat_val = cue_obj_val.C * F_train
-display("S_hat val done")
+if VERBOSE == 1
+    display("S_hat val done")
+end
 
 # we evaluate them
 
-
-"""num_rows = size(Chat_train, 1)
-split_point = num_rows ÷ 2
-
-small_matrix = Chat_train[1:min(num_rows,15000) , :]
-small_matrix_2 = cue_obj_train.C[1:min(num_rows,15000) , :]
-Shat_train_small = Shat_train[1:min(num_rows,15000) , :]
-S_train_small = S_train[1:min(num_rows,15000) , :]
-display("evaluation 1")
-@show JudiLing.eval_SC(small_matrix, small_matrix_2)
-display("evaluation 2")
-@show JudiLing.eval_SC(Chat_val, cue_obj_val.C)
-display("evaluation 3")
-@show JudiLing.eval_SC(Shat_train_small, S_train_small)
-display("evaluation 4")
-@show JudiLing.eval_SC(Shat_val, S_val)
-display("evaluation done")
-"""
 num_rows = size(Chat_train, 1)
 batch_size = 15000
 
-# Arrays to store evaluation results for averaging later
-eval1_results = Float64[]
-eval3_results = Float64[]
+# Arrays to store evaluation results for averaging later (because train_set is too big)
+train_form_results = Float64[]
+train_sem_results = Float64[]
 
 for start_idx in 1:batch_size:num_rows
     end_idx = min(start_idx + batch_size - 1, num_rows)
     
     # Extracting the batches
-    small_matrix = Chat_train[start_idx:end_idx, :]
-    small_matrix_2 = cue_obj_train.C[start_idx:end_idx, :]
+    small_form_matrix = Chat_train[start_idx:end_idx, :]
+    small_form_matrix_2 = cue_obj_train.C[start_idx:end_idx, :]
     Shat_train_small = Shat_train[start_idx:end_idx, :]
     S_train_small = S_train[start_idx:end_idx, :]
     
     # Assuming eval_SC returns a scalar value that can be appended to an array
-    push!(eval1_results, JudiLing.eval_SC(small_matrix, small_matrix_2))
-    push!(eval3_results, JudiLing.eval_SC(Shat_train_small, S_train_small))
+    push!(train_form_results, JudiLing.eval_SC(small_form_matrix, small_form_matrix_2))
+    push!(train_sem_results, JudiLing.eval_SC(Shat_train_small, S_train_small))
 end
 
 # Evaluation 2 and 4 are assumed to be computed on the full validation sets
-eval2 = JudiLing.eval_SC(Chat_val, cue_obj_val.C)
-eval4 = JudiLing.eval_SC(Shat_val, S_val)
+eval_form_acc = JudiLing.eval_SC(Chat_val, cue_obj_val.C)
+eval_sem_acc = JudiLing.eval_SC(Shat_val, S_val)
 
-# Averaging the batch results
-avg_eval1 = mean(eval1_results)
-avg_eval3 = mean(eval3_results)
+# Averaging the batch results for train because train was too big
+train_form_acc = mean(train_form_results)
+train_sem_acc = mean(train_sem_results)
 
 # Printing the final averaged results
-println("train form prediction: $avg_eval1")
-println("Eval Form prediction : $eval2") # This is computed on the full set, not averaged over batches
-println("train semantic prediction : $avg_eval3")
-println("Eval Semantic prediction: $eval4") # Also computed on the full set
-
+display("------RESULTS------")
+println("train form prediction: $(train_form_acc*100)%")
+println("train semantic prediction : $(train_sem_acc*100)%")
+println("Eval form prediction : $(eval_form_acc*100)%") # This is computed on the full set, not averaged over batches
+println("Eval Semantic prediction: $(eval_sem_acc*100)%") # Also computed on the full set
+display("-------------------")
 
 # we can use build path and learn path
 A = cue_obj_train.A
@@ -370,7 +385,7 @@ JudiLing.write2csv(
     path_sep_token = ":",
     target_col = :lexeme,
     root_dir = @__DIR__,
-    output_dir = "french_out",
+    output_dir = "french_out_$(POS)_phono:$(PHONO)",
 )
 
 JudiLing.write2csv(
@@ -387,7 +402,7 @@ JudiLing.write2csv(
     path_sep_token = ":",
     target_col = :lexeme,
     root_dir = @__DIR__,
-    output_dir = "french_out",
+    output_dir = "french_out_$(POS)_phono:$(PHONO)",
 )
 
 acc_build_train =
@@ -400,7 +415,7 @@ acc_build_val = JudiLing.eval_acc(res_build_val, cue_obj_val.gold_ind, verbose =
 @show acc_build_val
 
 # Once you are done, you may want to clean up the workspace
-#rm(joinpath(@__DIR__, "data"), force = true, recursive = true)
-#rm(joinpath(@__DIR__, "french_out"), force = true, recursive = true)
+# rm(joinpath(@__DIR__, "data"), force = true, recursive = true)
+# rm(joinpath(@__DIR__, "french_out"), force = true, recursive = true)
 
 
