@@ -5,6 +5,7 @@ using Statistics # mean function
 using Word2Vec # load embeddings
 
 
+
 mkpath(joinpath(@__DIR__, "data"))
 # load french file
 nouns = DataFrame(CSV.File(joinpath(@__DIR__, "assets", "distrib", "nlexique.csv")))
@@ -138,6 +139,7 @@ train_val_overlap = length(train_set ∩ val_set)
 display("number of words in train: $train_size")
 display("number of words in val: $val_size")
 display("number of trigrams: $trigram_size")
+
 if VERBOSE == 1
     display("number of words both in val and train (should be 0): $train_val_overlap")
 end
@@ -172,6 +174,7 @@ S_train = french_embed[train_filter]
 S_val = french_embed[val_filter]
 
 
+
 display("transforming vector of vectors into matrix")
 S_train = reduce(vcat, transpose.(S_train))
 S_val = reduce(vcat, transpose.(S_val))
@@ -187,6 +190,7 @@ display("form to meaning done")
 
 # we predict S and C for both training and validation datasets
 Chat_train = S_train * G_train
+<<<<<<< HEAD
 if VERBOSE == 1
     display("C_hat train done")
 end
@@ -376,6 +380,7 @@ JudiLing.write2csv(
     french,
     cue_obj_train,
     cue_obj_train,
+
     "french_build_train_res.csv",
     grams = 3,
     tokenized = false,
@@ -417,5 +422,6 @@ acc_build_val = JudiLing.eval_acc(res_build_val, cue_obj_val.gold_ind, verbose =
 # Once you are done, you may want to clean up the workspace
 # rm(joinpath(@__DIR__, "data"), force = true, recursive = true)
 # rm(joinpath(@__DIR__, "french_out"), force = true, recursive = true)
+
 
 
