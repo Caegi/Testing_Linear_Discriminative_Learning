@@ -23,12 +23,14 @@ VERBOSE = 0 # set verbosity to 1 to have more information about the process
 # if you want to use the phonological form, french and ortho_dataset should be different (ex adj and ortho_adj or verbs and ortho_verbs)
 # so at each CHANGE you MUST change 3 variable: french, ortho_dataset and POS so that they are consistent
 
-french = ortho_adjs
-ortho_dataset = ortho_adjs
-POS = "_adj" # _v for verbs _n for nouns _adj for adjectives
-PHONO = ortho_dataset == french # variable used for logging
+ortho_verbs = ortho_verbs
 
-column_names = vcat(["lexeme"], names(ortho_dataset)[3:end]) # ignore the variant column
+french = verbs
+ortho_dataset = ortho_verbs
+POS = "_v" # _v for verbs _n for nouns _adj for adjectives
+PHONO = ortho_dataset == french # variable used for logging
+MODE = PHONO ? "phoneme" : "grapheme" # variable used for logging
+column_names = vcat(["lexeme"], names(ortho_dataset)[2:end]) # ignore the variant column
 
 voca = Set(vocabulary(model))
 display("the column of the df are: $(column_names)")
@@ -136,6 +138,7 @@ train_size = length(train_set)
 val_size = length(val_set)
 trigram_size = length(all_trigrams)
 train_val_overlap = length(train_set ∩ val_set)
+dataset_size = length((train_set ∪ val_set))
 display("number of words in train: $train_size")
 display("number of words in val: $val_size")
 display("number of trigrams: $trigram_size")
@@ -241,10 +244,10 @@ train_sem_acc = mean(train_sem_results)
 
 # Printing the final averaged results
 display("------RESULTS------")
-println("train form prediction: $(train_form_acc*100)%")
 println("train semantic prediction : $(train_sem_acc*100)%")
-println("Eval form prediction : $(eval_form_acc*100)%") # This is computed on the full set, not averaged over batches
+println("train form prediction: $(train_form_acc*100)%")
 println("Eval Semantic prediction: $(eval_sem_acc*100)%") # Also computed on the full set
+println("Eval form prediction : $(eval_form_acc*100)%") # This is computed on the full set, not averaged over batches
 display("-------------------")
 
 # we can use build path and learn path
@@ -305,10 +308,12 @@ res_learn_val, gpi_learn_val = JudiLing.learn_paths(
     verbose = true,
 )
 
+"""display(french)
+display(res_learn_train)"""
 # you can save results into csv files or dfs
 JudiLing.write2csv(
     res_learn_train,
-    french,
+    french_form,
     cue_obj_train,
     cue_obj_train,
     "french_learn_train_res.csv",
@@ -325,7 +330,7 @@ JudiLing.write2csv(
 
 JudiLing.write2csv(
     res_learn_val,
-    french,
+    french_form,
     cue_obj_val,
     cue_obj_val,
     "french_learn_val_res.csv",
@@ -377,10 +382,9 @@ res_build_val = JudiLing.build_paths(
 
 JudiLing.write2csv(
     res_build_train,
-    french,
+    french_form,
     cue_obj_train,
     cue_obj_train,
-
     "french_build_train_res.csv",
     grams = 3,
     tokenized = false,
@@ -390,12 +394,12 @@ JudiLing.write2csv(
     path_sep_token = ":",
     target_col = :lexeme,
     root_dir = @__DIR__,
-    output_dir = "french_out_$(POS)_phono:$(PHONO)",
+    output_dir = "french_out_$(POS)_$MODE_$dataset_size",
 )
 
 JudiLing.write2csv(
     res_build_val,
-    french,
+    french_form,
     cue_obj_val,
     cue_obj_val,
     "french_build_val_res.csv",
@@ -407,7 +411,7 @@ JudiLing.write2csv(
     path_sep_token = ":",
     target_col = :lexeme,
     root_dir = @__DIR__,
-    output_dir = "french_out_$(POS)_phono:$(PHONO)",
+    output_dir = "french_out_$(POS)_$MODE_$dataset_size",
 )
 
 acc_build_train =
