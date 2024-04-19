@@ -465,12 +465,9 @@ function run(french, ortho_dataset, POS, CORPUS_MAX_SIZE, PHONO)
     # rm(joinpath(@__DIR__, "french_out"), force = true, recursive = true)
 end
 
-for CORPUS_MAX_SIZE in [10000, 60000]
-    for PHONO in [true, false]
-        for POS in ["_v", "_nc", "_adj"]
-            if POS == "_v" && PHONO
-                continue
-            end
+for CORPUS_MAX_SIZE in [10000, 20000] # choose the upper bound of the corpus size and target (might not be reached)
+    for PHONO in [true, false] # choose if you want to use the phonological or orthographic form or both
+        for POS in ["_v", "_nc", "_adj"] # choose the part of speech you want to use, several will do a grid run
             MODE = PHONO ? "phoneme" : "grapheme" # variable used for logging
             display("--- STARTING RUN: CORPUS_MAX_SIZE = $CORPUS_MAX_SIZE, $MODE, POS = $POS ---")
             if POS == "_v"
