@@ -1,5 +1,5 @@
 model,accuracy
-learn_train,0.3854
-learn_val,0.0512
-build_train,0.4762
-build_val,0.0151
+learn_train,0.35
+learn_val,0.2574
+build_train,0.3769
+build_val,0.2157

@@ -41,9 +41,6 @@ POS = "_v" # _v for verbs _n for nouns _adj for adjectives
 
 function run(french, ortho_dataset, POS, CORPUS_MAX_SIZE, PHONO)
 
-    """french = verbs
-    ortho_dataset = ortho_verbs"""
-    
     
     MODE = PHONO ? "phoneme" : "grapheme" # variable used for logging
     
@@ -86,9 +83,7 @@ function run(french, ortho_dataset, POS, CORPUS_MAX_SIZE, PHONO)
     end
 
 
-
-
-    # Split the dataset into training and validation sets
+    
     function get_trigrams(word::AbstractString)
         trigrams = Set()
         word = "#" * word * "#" 
@@ -113,30 +108,33 @@ function run(french, ortho_dataset, POS, CORPUS_MAX_SIZE, PHONO)
     # Iterate over words in the dataset
     train_filter = []
     val_filter = []
-    help = []
 
-    column_size = 100000
-
-
+    col = 0
+    # Split the dataset into training and validation sets
     for column in french_forms
-        i = 0
-        col = length(help)+1
+        row = 0
+        # col = length(help)+1
+        col += 1
         
-        push!(help, 1)
-        for word in column # french_forms[!, column]
-            i += 1
-            if word ∈ (train_set ∪ val_set) || length((train_set ∪ val_set)) >= CORPUS_MAX_SIZE || i >= column_size
+        for word in column 
+            row += 1
+            # if a word is already in the training or validation set or if the size of the dataset is greater than the maximum size, skip it
+            if length((train_set ∪ val_set)) >= CORPUS_MAX_SIZE # || word ∈ (train_set ∪ val_set)  
                 push!(train_filter, false)
                 push!(val_filter, false)
                 continue
             end
             word_trigrams = get_trigrams(word)
-            if any(trigram ∉ all_trigrams for trigram in word_trigrams) || length(help) <= 1 || length(val_set) >= round(length(train_set) * 0.2) || (i + col) % 2 == 0
+            # if the word does contains any trigram that is not in the set of all trigrams
+            # or if the column is the first or second or if the size of the validation set is greater than 20% of the training set
+            # or if the sum of the row and column is even (to have a balanced dataset)
+            # add it to the training set
+            if any(trigram ∉ all_trigrams for trigram in word_trigrams) || col <= 1 || length(val_set) >= round(length(train_set) * 0.2) || (row + col) % 2 == 0
                 push!(train_set, word)
                 union!(all_trigrams, word_trigrams)
                 push!(train_filter, true)
                 push!(val_filter, false)
-            #  push!(all_trigrams, word_trigrams)
+            # otherwise add it to the validation set
             else
                 push!(val_set, word)
                 push!(train_filter, false)
@@ -195,11 +193,9 @@ function run(french, ortho_dataset, POS, CORPUS_MAX_SIZE, PHONO)
     S_val = french_embed[val_filter]
 
 
-
     display("transforming vector of vectors into matrix")
     S_train = reduce(vcat, transpose.(S_train))
     S_val = reduce(vcat, transpose.(S_val))
-
 
 
     # here we learning mapping only from training dataset
@@ -233,32 +229,37 @@ function run(french, ortho_dataset, POS, CORPUS_MAX_SIZE, PHONO)
 
     num_rows = size(Chat_train, 1)
     batch_size = 15000
+    if num_rows >= batch_size
+    
+        # Arrays to store evaluation results for averaging later (because train_set is too big)
+        train_form_results = Float64[]
+        train_sem_results = Float64[]
 
-    # Arrays to store evaluation results for averaging later (because train_set is too big)
-    train_form_results = Float64[]
-    train_sem_results = Float64[]
-
-    for start_idx in 1:batch_size:num_rows
-        end_idx = min(start_idx + batch_size - 1, num_rows)
-        
-        # Extracting the batches
-        small_form_matrix = Chat_train[start_idx:end_idx, :]
-        small_form_matrix_2 = cue_obj_train.C[start_idx:end_idx, :]
-        Shat_train_small = Shat_train[start_idx:end_idx, :]
-        S_train_small = S_train[start_idx:end_idx, :]
-        
-        # Assuming eval_SC returns a scalar value that can be appended to an array
-        push!(train_form_results, JudiLing.eval_SC(small_form_matrix, small_form_matrix_2))
-        push!(train_sem_results, JudiLing.eval_SC(Shat_train_small, S_train_small))
+        for start_idx in 1:batch_size:num_rows
+            end_idx = min(start_idx + batch_size - 1, num_rows)
+            
+            # Extracting the batches
+            small_form_matrix = Chat_train[start_idx:end_idx, :]
+            small_form_matrix_2 = cue_obj_train.C[start_idx:end_idx, :]
+            Shat_train_small = Shat_train[start_idx:end_idx, :]
+            S_train_small = S_train[start_idx:end_idx, :]
+            
+            # Assuming eval_SC returns a scalar value that can be appended to an array
+            push!(train_form_results, JudiLing.eval_SC(small_form_matrix, small_form_matrix_2))
+            push!(train_sem_results, JudiLing.eval_SC(Shat_train_small, S_train_small))
+        end
+         # Averaging the batch results for train because train was too big
+        train_form_acc = mean(train_form_results)
+        train_sem_acc = mean(train_sem_results)
+    else
+        train_form_acc = JudiLing.eval_SC(Chat_train, cue_obj_train.C)
+        train_sem_acc = JudiLing.eval_SC(Shat_train, S_train)
     end
-
     # Evaluation 2 and 4 are assumed to be computed on the full validation sets
     eval_form_acc = JudiLing.eval_SC(Chat_val, cue_obj_val.C)
     eval_sem_acc = JudiLing.eval_SC(Shat_val, S_val)
 
-    # Averaging the batch results for train because train was too big
-    train_form_acc = mean(train_form_results)
-    train_sem_acc = mean(train_sem_results)
+   
 
     # Printing the final averaged results
     display("------RESULTS------")
@@ -334,8 +335,6 @@ function run(french, ortho_dataset, POS, CORPUS_MAX_SIZE, PHONO)
         verbose = true,
     )
 
-    """display(french)
-    display(res_learn_train)"""
     # you can save results into csv files or dfs
     JudiLing.write2csv(
         res_learn_train,
