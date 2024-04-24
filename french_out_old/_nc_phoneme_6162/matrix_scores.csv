@@ -1,5 +1,0 @@
-model,accuracy
-train_semantic,0.9771
-train_form,0.0529
-eval_semantic,0.1905
-eval_form,0.0335
