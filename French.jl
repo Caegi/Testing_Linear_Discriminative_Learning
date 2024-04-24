@@ -3,6 +3,7 @@ using CSV # read csv files
 using DataFrames # parse data into dataframes
 using Statistics # mean function
 using Word2Vec # load embeddings
+using Random # shuffle data
 
 
 
@@ -27,7 +28,6 @@ select!(ortho_nouns, Not(:gen))
 # drop "variants" column for all datasets:
 for df in [nouns, adjs, verbs, ortho_adjs, ortho_verbs, ortho_nouns]  
     select!(df, Not(:variants))
-    
 end
 # choose which dataset to use can be either verbs or adjs or nouns, and their phonological form or their orthographic form
 # if you want to use the orthographic form, french and ortho_dataset should be the same (and orthographic): (ex ortho_adj and ortho_adj, ortho_verbs and ortho_verbs)
@@ -129,7 +129,7 @@ function run(french, ortho_dataset, POS, CORPUS_MAX_SIZE, PHONO)
             # or if the column is the first or second or if the size of the validation set is greater than 20% of the training set
             # or if the sum of the row and column is even (to have a balanced dataset)
             # add it to the training set
-            if any(trigram ∉ all_trigrams for trigram in word_trigrams) || col <= 1 || length(val_set) >= round(length(train_set) * 0.2) || (row + col) % 2 == 0
+            if col <= 1 || length(val_set) >= round(length((train_set ∪ val_set)) * 0.2) || (row + col) % 2 == 0 # || any(trigram ∉ all_trigrams for trigram in word_trigrams)
                 push!(train_set, word)
                 union!(all_trigrams, word_trigrams)
                 push!(train_filter, true)
@@ -154,16 +154,14 @@ function run(french, ortho_dataset, POS, CORPUS_MAX_SIZE, PHONO)
     trigram_size = length(all_trigrams)
     train_val_overlap = length(train_set ∩ val_set)
     dataset_size = length((train_set ∪ val_set))
+    # Create the output directory
     mkpath(joinpath(@__DIR__, "french_out", "$(POS)_$(MODE)_$dataset_size"))
     display("number of words in train: $train_size")
     display("number of words in val: $val_size")
     display("number of trigrams: $trigram_size")
 
-    if VERBOSE == 1
-        display("number of words both in val and train (should be 0): $train_val_overlap")
-    end
-
-
+    display("number of words both in val and train (should be 0): $train_val_overlap")
+    
     train_filter = convert(Array{Bool}, train_filter)
     val_filter = convert(Array{Bool}, val_filter)
 
@@ -176,7 +174,7 @@ function run(french, ortho_dataset, POS, CORPUS_MAX_SIZE, PHONO)
 
 
     # create C matrices for both training and validation datasets
-    cue_obj_train, cue_obj_val = JudiLing.make_cue_matrix(
+    cue_obj_train, cue_obj_val = JudiLing.make_combined_cue_matrix(
         french_train,
         french_val,
         grams = 3,
@@ -186,41 +184,48 @@ function run(french, ortho_dataset, POS, CORPUS_MAX_SIZE, PHONO)
     )
 
     # create S matrices
-    n_features = size(cue_obj_train.C, 2)
 
     display("creating Semantic matrices")
     S_train = french_embed[train_filter]
     S_val = french_embed[val_filter]
-
+    
 
     display("transforming vector of vectors into matrix")
     S_train = reduce(vcat, transpose.(S_train))
     S_val = reduce(vcat, transpose.(S_val))
-
+    # display size of S_train and S_val matrices
+    display("size of S_train: $(size(S_train))")
+    display("size of S_val: $(size(S_val))")
 
     # here we learning mapping only from training dataset
     display("learning transform matrices")
-    G_train = JudiLing.make_transform_matrix(S_train, cue_obj_train.C)
+    G = JudiLing.make_transform_matrix(S_train, cue_obj_train.C)
+    display("size of G: $(size(G))")
     display("meaning to form done")
-    F_train = JudiLing.make_transform_matrix(cue_obj_train.C, S_train)
+    F = JudiLing.make_transform_matrix(cue_obj_train.C, S_train)
+    display("size of F: $(size(F))")
     display("form to meaning done")
 
     # we predict S and C for both training and validation datasets
-    Chat_train = S_train * G_train
+    Chat_train = S_train * G
+    display("size of Chat_train: $(size(Chat_train))")
 
     if VERBOSE == 1
         display("C_hat train done")
     end
 
-    Chat_val = S_val * G_train
+    Chat_val = S_val * G
     if VERBOSE == 1   
         display("C_hat val done")
     end
-    Shat_train = cue_obj_train.C * F_train
+    Shat_train = cue_obj_train.C * F
+    display("size of S_hat train $(size(Shat_train))")
+
     if VERBOSE == 1
         display("S_hat train done")
     end
-    Shat_val = cue_obj_val.C * F_train
+    Shat_val = cue_obj_val.C * F
+    display("size of S_val $(size(Shat_val))")
     if VERBOSE == 1
         display("S_hat val done")
     end
@@ -273,10 +278,14 @@ function run(french, ortho_dataset, POS, CORPUS_MAX_SIZE, PHONO)
 
     CSV.write(joinpath(@__DIR__, "french_out", "$(POS)_$(MODE)_$dataset_size", "matrix_scores.csv"), DataFrame(
         model = ["train_semantic", "train_form", "eval_semantic", "eval_form"],
-        accuracy = [train_sem_acc, train_form_acc, eval_sem_acc, eval_form_acc]
+        accuracy = [train_sem_acc, train_form_acc, eval_sem_acc, eval_form_acc],
+        train_eval_trigram_overlap = [length(train_set), length(val_set), trigram_size, train_val_overlap]
     ))
 
-
+    if dataset_size > 8000
+        display("dataset size is greater than 10000, we will not build paths")
+        return
+    end
     # we can use build path and learn path
     A = cue_obj_train.A
     max_t = JudiLing.cal_max_timestep(french_train, french_val, :lexeme)
@@ -287,7 +296,7 @@ function run(french, ortho_dataset, POS, CORPUS_MAX_SIZE, PHONO)
         french_train,
         cue_obj_train.C,
         S_train,
-        F_train,
+        F,
         Chat_train,
         A,
         cue_obj_train.i2f,
@@ -299,6 +308,9 @@ function run(french, ortho_dataset, POS, CORPUS_MAX_SIZE, PHONO)
         max_can = 10,
         grams = 3,
         threshold = 0.05,
+        is_tolerant = true,
+        tolerance = -0.1,
+        max_tolerance = 2,
         tokenized = false,
         sep_token = "_",
         keep_sep = false,
@@ -312,7 +324,7 @@ function run(french, ortho_dataset, POS, CORPUS_MAX_SIZE, PHONO)
         french_val,
         cue_obj_train.C,
         S_val,
-        F_train,
+        F,
         Chat_val,
         A,
         cue_obj_train.i2f,
@@ -338,7 +350,7 @@ function run(french, ortho_dataset, POS, CORPUS_MAX_SIZE, PHONO)
     # you can save results into csv files or dfs
     JudiLing.write2csv(
         res_learn_train,
-        french_form,
+        french_train,
         cue_obj_train,
         cue_obj_train,
         "french_learn_train_res.csv",
@@ -355,7 +367,7 @@ function run(french, ortho_dataset, POS, CORPUS_MAX_SIZE, PHONO)
 
     JudiLing.write2csv(
         res_learn_val,
-        french_form,
+        french_val,
         cue_obj_val,
         cue_obj_val,
         "french_learn_val_res.csv",
@@ -375,12 +387,13 @@ function run(french, ortho_dataset, POS, CORPUS_MAX_SIZE, PHONO)
         JudiLing.eval_acc(res_learn_train, cue_obj_train.gold_ind, verbose = false)
     acc_learn_val = JudiLing.eval_acc(res_learn_val, cue_obj_val.gold_ind, verbose = false)
 
+    
     # with build: 
     res_build_train = JudiLing.build_paths(
         french_train,
         cue_obj_train.C,
         S_train,
-        F_train,
+        F,
         Chat_train,
         A,
         cue_obj_train.i2f,
@@ -394,7 +407,7 @@ function run(french, ortho_dataset, POS, CORPUS_MAX_SIZE, PHONO)
         french_val,
         cue_obj_train.C,
         S_val,
-        F_train,
+        F,
         Chat_val,
         A,
         cue_obj_train.i2f,
@@ -407,7 +420,7 @@ function run(french, ortho_dataset, POS, CORPUS_MAX_SIZE, PHONO)
 
     JudiLing.write2csv(
         res_build_train,
-        french_form,
+        french_train,
         cue_obj_train,
         cue_obj_train,
         "french_build_train_res.csv",
@@ -424,7 +437,7 @@ function run(french, ortho_dataset, POS, CORPUS_MAX_SIZE, PHONO)
 
     JudiLing.write2csv(
         res_build_val,
-        french_form,
+        french_val,
         cue_obj_val,
         cue_obj_val,
         "french_build_val_res.csv",
@@ -464,10 +477,11 @@ function run(french, ortho_dataset, POS, CORPUS_MAX_SIZE, PHONO)
     # rm(joinpath(@__DIR__, "french_out"), force = true, recursive = true)
 end
 
-for CORPUS_MAX_SIZE in [10000, 20000] # choose the upper bound of the corpus size and target (might not be reached)
-    for PHONO in [true, false] # choose if you want to use the phonological or orthographic form or both
-        for POS in ["_v", "_nc", "_adj"] # choose the part of speech you want to use, several will do a grid run
+for CORPUS_MAX_SIZE in [10000, 20000, 50000] # choose the upper bound of the corpus size and target (might not be reached)
+    for POS in ["_nc", "_adj", "_v", ] # choose if you want to use the phonological or orthographic form or both
+        for PHONO in [true, false] # choose the part of speech you want to use, several will do a grid run
             MODE = PHONO ? "phoneme" : "grapheme" # variable used for logging
+            display("")
             display("--- STARTING RUN: CORPUS_MAX_SIZE = $CORPUS_MAX_SIZE, $MODE, POS = $POS ---")
             if POS == "_v"
                 french = PHONO ? verbs : ortho_verbs
@@ -483,17 +497,25 @@ for CORPUS_MAX_SIZE in [10000, 20000] # choose the upper bound of the corpus siz
             n_col = length(names(french))
             max_row_size = floor(Int, CORPUS_MAX_SIZE / n_col)
             
+            # shuffle 
+            # Get random permutation of indices
+            rng = MersenneTwister(1234)  # Initialize random number generator with a seed
+            
+            indices = shuffle(rng, 1:size(french, 1))
+            display(length(indices))
+            # Shuffle both dataframes using the same permutation of indices
+            french = french[indices, :]
+            ortho_dataset = ortho_dataset[indices, :]
+
             if max_row_size < n_row
                 display("reducing the size of the dataset to $max_row_size rows")
                 french = french[1:max_row_size, :]
                 ortho_dataset = ortho_dataset[1:max_row_size, :]
             end
-            
-            # make a dir to store the results:
-            
-            
-            
-          
+            if PHONO
+                select!(french, Not(:lexeme))
+                select!(ortho_dataset, Not(:lexeme))
+            end
             run(french, ortho_dataset, POS, CORPUS_MAX_SIZE, PHONO)
         end
     end

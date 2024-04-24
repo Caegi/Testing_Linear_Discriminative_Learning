@@ -1,0 +1,5 @@
+model,accuracy,train_eval_trigram_overlap
+train_semantic,0.7138,11015
+train_form,0.0116,1996
+eval_semantic,0.3216,5793
+eval_form,0.0075,0
